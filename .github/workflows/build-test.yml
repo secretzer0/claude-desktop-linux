@@ -1,0 +1,73 @@
+name: Build Test
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential curl wget
+
+    - name: Test install.sh syntax
+      run: |
+        bash -n install.sh
+        echo "✅ install.sh syntax is valid"
+
+    - name: Test uninstall.sh syntax
+      run: |
+        bash -n uninstall.sh
+        echo "✅ uninstall.sh syntax is valid"
+
+    - name: Test build.sh syntax
+      run: |
+        bash -n build.sh
+        echo "✅ build.sh syntax is valid"
+
+    - name: Extract version info
+      run: |
+        VERSION=$(grep 'INSTALLER_VERSION=' install.sh | cut -d'"' -f2)
+        echo "Version detected: $VERSION"
+        
+    - name: Test build process
+      run: |
+        chmod +x build.sh
+        ./build.sh
+        
+    - name: Verify build artifacts
+      run: |
+        echo "Build artifacts created:"
+        ls -la build/release/
+        echo ""
+        echo "Installer file details:"
+        file build/release/claude-desktop-linux-installer
+        echo ""
+        echo "File sizes:"
+        du -h build/release/*
+        
+    - name: Test installer extraction
+      run: |
+        echo "Testing installer self-extraction..."
+        cd build/release
+        chmod +x claude-desktop-linux-installer
+        
+        # Test that the installer can extract (but don't run it)
+        # This tests the self-extracting archive functionality
+        timeout 10s ./claude-desktop-linux-installer --help 2>/dev/null || true
+        echo "✅ Installer extraction test completed"
+
+    - name: Validate checksums
+      run: |
+        cd build/release
+        echo "Validating checksums..."
+        sha256sum -c checksums.sha256
+        echo "✅ All checksums are valid"

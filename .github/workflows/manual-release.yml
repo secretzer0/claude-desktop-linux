@@ -1,0 +1,138 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Version override (leave empty to use version from install.sh)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  manual-release:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      packages: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential curl wget
+
+    - name: Determine version
+      id: get_version
+      run: |
+        if [ -n "${{ github.event.inputs.version_override }}" ]; then
+          VERSION="${{ github.event.inputs.version_override }}"
+          echo "Using override version: $VERSION"
+        else
+          VERSION=$(grep 'INSTALLER_VERSION=' install.sh | cut -d'"' -f2)
+          echo "Using version from install.sh: $VERSION"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Update version in install.sh if overridden
+      if: github.event.inputs.version_override != ''
+      run: |
+        VERSION="${{ github.event.inputs.version_override }}"
+        sed -i "s/INSTALLER_VERSION=\".*\"/INSTALLER_VERSION=\"$VERSION\"/" install.sh
+        echo "Updated install.sh version to: $VERSION"
+
+    - name: Build installer
+      run: |
+        chmod +x build.sh
+        ./build.sh
+        
+    - name: Verify build artifacts
+      run: |
+        ls -la build/release/
+        file build/release/claude-desktop-linux-installer
+        
+    - name: Create or update release tag
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Delete existing tag if it exists
+        if git tag --list | grep -q "^v$VERSION$"; then
+          echo "Deleting existing tag v$VERSION"
+          git tag -d "v$VERSION" || true
+          git push origin ":refs/tags/v$VERSION" || true
+        fi
+        
+        git tag -a "v$VERSION" -m "Manual release v$VERSION"
+        git push origin "v$VERSION"
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        
+        cat > release_notes.md << EOF
+        # Claude Desktop Linux v$VERSION
+        
+        🚀 **Manual Release**
+        
+        This release was created manually via GitHub Actions workflow.
+        
+        ## Installation
+        
+        ### Quick Install (Recommended)
+        \`\`\`bash
+        wget https://github.com/${{ github.repository }}/releases/download/v$VERSION/claude-desktop-linux-installer
+        chmod +x claude-desktop-linux-installer
+        ./claude-desktop-linux-installer
+        \`\`\`
+        
+        ## Files in this Release
+        
+        - **claude-desktop-linux-installer**: Self-extracting installer
+        - **claude-desktop-linux-v$VERSION-source.tar.gz**: Source code archive  
+        - **checksums.sha256**: File integrity verification
+        
+        ## Features
+        
+        - 🚀 One-command installation
+        - 🔒 Secure Chrome sandbox setup
+        - 🎨 Desktop integration with proper icons
+        - 📱 Dash pinning for easy access
+        - 🛠️ Desktop Commander integration
+        - 🗑️ Clean uninstallation support
+        EOF
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.get_version.outputs.version }}
+        name: Claude Desktop Linux v${{ steps.get_version.outputs.version }}
+        body_path: release_notes.md
+        files: |
+          build/release/claude-desktop-linux-installer
+          build/release/claude-desktop-linux-v${{ steps.get_version.outputs.version }}-source.tar.gz
+          build/release/checksums.sha256
+        draft: false
+        prerelease: ${{ github.event.inputs.prerelease }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Release summary
+      run: |
+        echo "✅ Manual release v${{ steps.get_version.outputs.version }} created!"
+        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.get_version.outputs.version }}"
+        if [ "${{ github.event.inputs.prerelease }}" = "true" ]; then
+          echo "🚧 Marked as pre-release"
+        fi

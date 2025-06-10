@@ -1,0 +1,170 @@
+name: Build and Release Claude Desktop Linux
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [ closed ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    
+    permissions:
+      contents: write
+      packages: write
+      
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential curl wget
+
+    - name: Extract version from install.sh
+      id: get_version
+      run: |
+        VERSION=$(grep 'INSTALLER_VERSION=' install.sh | cut -d'"' -f2)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version detected: $VERSION"
+
+    - name: Check if release already exists
+      id: check_release
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        if git tag --list | grep -q "^v$VERSION$"; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Release v$VERSION already exists"
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Release v$VERSION does not exist"
+        fi
+
+    - name: Build installer
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        chmod +x build.sh
+        ./build.sh
+        
+    - name: Verify build artifacts
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        ls -la build/release/
+        file build/release/claude-desktop-linux-installer
+        
+    - name: Create release tag
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag -a "v$VERSION" -m "Release v$VERSION"
+        git push origin "v$VERSION"
+
+    - name: Generate release notes
+      if: steps.check_release.outputs.exists == 'false'
+      id: release_notes
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        
+        # Get commits since last tag
+        LAST_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        if [ -n "$LAST_TAG" ]; then
+          COMMITS=$(git log --pretty=format:"- %s (%h)" $LAST_TAG..HEAD)
+        else
+          COMMITS=$(git log --pretty=format:"- %s (%h)" --max-count=10)
+        fi
+        
+        # Create release notes
+        cat > release_notes.md << EOF
+        # Claude Desktop Linux v$VERSION
+        
+        ## What's New
+        
+        $COMMITS
+        
+        ## Installation
+        
+        ### Quick Install (Recommended)
+        \`\`\`bash
+        # Download and run the installer
+        wget https://github.com/${{ github.repository }}/releases/download/v$VERSION/claude-desktop-linux-installer
+        chmod +x claude-desktop-linux-installer
+        ./claude-desktop-linux-installer
+        \`\`\`
+        
+        ### Alternative Installation
+        \`\`\`bash
+        # Using curl
+        curl -fsSL https://github.com/${{ github.repository }}/releases/download/v$VERSION/claude-desktop-linux-installer -o claude-desktop-linux-installer
+        chmod +x claude-desktop-linux-installer
+        ./claude-desktop-linux-installer
+        \`\`\`
+        
+        ## Files in this Release
+        
+        - **claude-desktop-linux-installer**: Self-extracting installer (recommended)
+        - **claude-desktop-linux-v$VERSION-source.tar.gz**: Source code archive
+        - **checksums.sha256**: File integrity verification
+        
+        ## Verification
+        
+        Verify file integrity using SHA256:
+        \`\`\`bash
+        sha256sum -c checksums.sha256
+        \`\`\`
+        
+        ## System Requirements
+        
+        - Ubuntu 20.04+ or compatible Debian-based distribution
+        - 5GB free disk space
+        - Internet connection for package downloads
+        
+        ## Features
+        
+        - 🚀 One-command installation
+        - 🔒 Secure Chrome sandbox setup
+        - 🎨 Desktop integration with proper icons
+        - 📱 Dash pinning for easy access
+        - 🛠️ Desktop Commander integration
+        - 🗑️ Clean uninstallation support
+        
+        ---
+        
+        **Full Changelog**: https://github.com/${{ github.repository }}/compare/$LAST_TAG...v$VERSION
+        EOF
+        
+        echo "Release notes generated"
+
+    - name: Create GitHub Release
+      if: steps.check_release.outputs.exists == 'false'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.get_version.outputs.version }}
+        name: Claude Desktop Linux v${{ steps.get_version.outputs.version }}
+        body_path: release_notes.md
+        files: |
+          build/release/claude-desktop-linux-installer
+          build/release/claude-desktop-linux-v${{ steps.get_version.outputs.version }}-source.tar.gz
+          build/release/checksums.sha256
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update latest release info
+      if: steps.check_release.outputs.exists == 'false'
+      run: |
+        echo "✅ Release v${{ steps.get_version.outputs.version }} created successfully!"
+        echo "📦 Installer: claude-desktop-linux-installer"
+        echo "📋 Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.get_version.outputs.version }}"
